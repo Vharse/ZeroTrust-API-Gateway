@@ -1,24 +1,25 @@
-name: Vharse DevOps Security Guard
+name: Product Security Gate
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci-updates]
   pull_request:
-    branches: [main, feature]
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+  
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+  pull-requests: read
+  security-events: write
 
 jobs:
   sast:
     uses: ./.github/workflows/sast.yml
-    permissions:
-      contents: read
-      pull-requests: read
-      security-events: write
-      actions: read
-      checks: write
     secrets:
       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -27,58 +28,45 @@ jobs:
 
   secret-scanning:
     uses: ./.github/workflows/secret-scanning.yml
-    permissions:
-      contents: read
-      pull-requests: read
-      security-events: write
-      actions: read
-      checks: write
 
   container-and-sbom:
     uses: ./.github/workflows/container-sbom.yml
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-      checks: write
     secrets:
       DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
       DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
 
   iac-and-opa:
     uses: ./.github/workflows/iac-opa.yml
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-      checks: write
 
   scorecard-audit:
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     uses: ./.github/workflows/scorecard.yml
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-      checks: write
-      id-token: write
 
   siem-telemetry:
     uses: ./.github/workflows/siem-telemetry.yml
-    permissions:
-      contents: read
-      actions: read
     secrets:
       ELASTIC_HOST: ${{ secrets.ELASTIC_HOST }}
       ELASTIC_API_KEY: ${{ secrets.ELASTIC_API_KEY }}
+
+  dast:
+    name: "DAST Scan"
+    uses: ./.github/workflows/dast.yml
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      target_url: "http://localhost:8080"
+      zap_plan_path: ".zap/zap-plan.yaml"
+    secrets:
+      DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+      DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_API_KEY }}
+      APP_USER: ${{ secrets.APP_USER }}
+      APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
 
   defectdojo-ingestion:
     needs: [sast, secret-scanning, container-and-sbom, iac-and-opa, scorecard-audit]
     if: always()
     uses: ./.github/workflows/defectdojo-sync.yml
-    permissions:
-      contents: read
-      actions: read
     with:
       sast_job_needed: true
       container_job_needed: true

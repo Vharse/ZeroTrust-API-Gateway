@@ -1,0 +1,82 @@
+name: "Product Release"
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# Global least-privilege token restriction required for OpenSSF Scorecard compliance
+permissions:
+  contents: read
+
+# Prevent race conditions while guaranteeing release builds finish completely
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-sign:
+    name: "Build, Sign & Publish Artifacts"
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write # Required for GitHub Release creation & tagging
+      packages: write # Required for GHCR push
+      id-token: write # Required for Cosign keyless (OIDC) signing
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@c0bcd58f26a8473770f1a01aab00b028d2d1ee78 # v3.8.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@327cd5a69de6c009b9ce71bce8395f28e651bf99 # v3.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Metadata (Tags, Labels)
+        id: meta
+        uses: docker/metadata-action@369eb75914ecc12123d78fa44f1e2304d1ba07f6 # v5.5.1
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+      - name: Build and Push Docker Image
+        id: build-and-push
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bec833687692e9658d86180f # v3.7.0
+
+      - name: Cryptographically Sign Image (Keyless OIDC)
+        run: |
+          cosign sign --yes "ghcr.io/${{ github.repository }}@${{ steps.build-and-push.outputs.digest }}"
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@f325610c0e5a40b90eef5f8f8702c40c313a0705 # v0.17.9
+        with:
+          image: "ghcr.io/${{ github.repository }}@${{ steps.build-and-push.outputs.digest }}"
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Attest SBOM
+        run: |
+          cosign attest --yes --predicate-type spdxjson --predicate sbom.spdx.json "ghcr.io/${{ github.repository }}@${{ steps.build-and-push.outputs.digest }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e20823d10c0e00a99923da6e0 # v2.0.8
+        with:
+          files: sbom.spdx.json
+          generate_release_notes: true

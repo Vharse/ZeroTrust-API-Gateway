@@ -1,0 +1,112 @@
+name: "Dynamic Application Security Testing"
+
+on:
+  workflow_call:
+    inputs:
+      target_url:
+        description: "Target URL to scan"
+        required: false
+        type: string
+        default: "http://localhost:8080"
+      zap_plan_path:
+        description: "Path to ZAP Automation Framework plan"
+        required: false
+        type: string
+        default: ".zap/zap-plan.yaml"
+    secrets:
+      DEFECTDOJO_URL:
+        required: true
+      DEFECTDOJO_TOKEN:
+        required: true
+      APP_USER:
+        required: false
+      APP_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  dast-scan:
+    name: "OWASP ZAP Automation Framework Scan"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "Checkout Source Code"
+        # Pinned to full commit SHA for actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: "Build and Launch Target Application"
+        run: |
+          docker network create zap-net
+          docker build -t target-app src/
+          docker run -d --name target-container --network zap-net -p 8080:8080 target-app
+
+          echo "Waiting for target application at ${{ inputs.target_url }}..."
+          if ! timeout 60s bash -c 'until curl -s http://localhost:8080 > /dev/null; do sleep 2; done'; then
+            echo "::error::Target application healthcheck timed out. Printing logs:"
+            docker logs target-container
+            exit 1
+          fi
+          echo "Target application is live."
+
+      - name: "Create Report Directory"
+        run: |
+          mkdir -p ${{ github.workspace }}/zap-results
+          chmod 777 ${{ github.workspace }}/zap-results
+
+      - name: "Run ZAP Automation Framework via Docker Container"
+        run: |
+          docker run --rm \
+            --user 1000:1000 \
+            --network zap-net \
+            -v ${{ github.workspace }}:/zap/wrk/:rw \
+            -e APP_USER="${{ secrets.APP_USER }}" \
+            -e APP_PASSWORD="${{ secrets.APP_PASSWORD }}" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap.sh -cmd -autorun /zap/wrk/${{ inputs.zap_plan_path }}
+
+      - name: "Verify Scan Execution"
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+
+          if [ -f "zap-results/zap-report.json" ]; then
+            # Secure copy preventing accidental symlink traversal
+            cp --no-target-directory zap-results/zap-report.json ./zap-report.json
+            echo "ZAP JSON report verified from results directory."
+          elif [ -f "zap-report.json" ]; then
+            echo "ZAP JSON report verified from root directory."
+          else
+            echo "::error::ZAP report generation failed. File not found."
+            # Debug without dumping file permissions or sensitive file names unnecessarily
+            find "$WORKSPACE" -maxdepth 2 -name "*.json"
+            exit 1
+          fi
+
+          # Optional Integrity Check: Ensure file is non-empty and valid JSON
+          jq empty zap-report.json || { echo "::error::ZAP report is corrupted or invalid JSON."; exit 1; }
+
+      - name: "Ingest Findings into DefectDojo"
+        if: always()
+        run: |
+          if [ -f "zap-report.json" ]; then
+            echo "Uploading DAST findings to DefectDojo..."
+            curl -X POST "${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/" \
+              -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" \
+              -F "active=true" \
+              -F "verified=false" \
+              -F "scan_type=ZAP Scan" \
+              -F "minimum_severity=Low" \
+              -F "engagement_name=CI/CD Pipeline" \
+              -F "product_name=Product Security Gate" \
+              -F "file=@zap-report.json"
+          fi
+
+      - name: "Tear Down Target Application"
+        if: always()
+        run: |
+          docker stop target-container || true
+          docker rm target-container || true

@@ -1,0 +1,80 @@
+name: "Dependency Security Scan"
+
+on:
+  workflow_call:
+    secrets:
+      DEFECTDOJO_URL:
+        required: false
+      DEFECTDOJO_API_KEY:
+        required: false
+
+jobs:
+  container-sca-sbom:
+    name: "SCA, Container Scan & SBOM"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    outputs:
+      trivy-json-path: trivy-results.json
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Check Dockerfile Existence
+        id: check_dockerfile
+        run: |
+          if [ -f "src/Dockerfile" ] || [ -f "Dockerfile" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Local Container Image
+        if: steps.check_dockerfile.outputs.exists == 'true'
+        run: |
+          if [ -f "src/Dockerfile" ]; then
+            [ -f "src/requirements.txt" ] || touch src/requirements.txt
+            docker build -t local-test-image:latest -f src/Dockerfile src/
+          else
+            [ -f "requirements.txt" ] || touch requirements.txt
+            docker build -t local-test-image:latest .
+          fi
+
+      - name: Trivy Container Scan
+        if: steps.check_dockerfile.outputs.exists == 'true'
+        uses: ./.github/actions/trivy-action # v0.36.0
+        with:
+          scan-type: "image"
+          image-ref: "local-test-image:latest"
+          format: "json"
+          output: "trivy-results.json"
+          severity: "HIGH,CRITICAL"
+          exit-code: "0"
+          ignore-unfixed: true
+
+      - name: Upload Trivy JSON Artifact
+        if: always() && steps.check_dockerfile.outputs.exists == 'true'
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.6.1
+        with:
+          name: trivy-json-report
+          path: trivy-results.json
+          if-no-files-found: ignore
+
+      - name: Generate SBOM
+        if: always()
+        uses: ./.github/actions/trivy-action # v0.36.0
+        with:
+          scan-type: "fs"
+          format: "spdx-json"
+          output: "sbom.spdx.json"
+
+      - name: Upload SBOM Artifact
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.6.0
+        with:
+          name: sbom-spdx-report
+          path: sbom.spdx.json
+          if-no-files-found: ignore

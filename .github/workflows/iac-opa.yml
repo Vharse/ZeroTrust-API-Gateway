@@ -1,0 +1,27 @@
+name: "Infrastructure as Code"
+
+on:
+  workflow_call:
+
+jobs:
+  iac-and-policy:
+    name: "IaC & OPA Policy Enforcement"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Open Policy Agent
+        uses: open-policy-agent/setup-opa@34a30e8a924d1b03ce2cf7abe97250bbb1f332b5
+        with:
+          version: latest
+
+      - name: Evaluate OPA Rego Policies
+        run: |
+          if [ -d "policies/opa" ]; then
+            opa eval --data policies/opa/ "data"
+          fi

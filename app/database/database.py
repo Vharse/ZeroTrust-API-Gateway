@@ -9,7 +9,6 @@ from typing import Generator
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Session
 
-# Request-scoped ContextVar for Zero Trust tenant isolation
 tenant_context: ContextVar[str] = ContextVar("tenant_context", default="")
 
 DB_USER = os.getenv("POSTGRES_USER", "app_user")
@@ -20,7 +19,7 @@ if not DB_PASS and not os.getenv("DATABASE_URL"):
 
 DB_HOST = os.getenv("POSTGRES_HOST", "db")
 DB_PORT = os.getenv("POSTGRES_PORT", "5432")
-DB_NAME = os.getenv("POSTGRES_DB", "access_control_db")
+DB_NAME = os.getenv("POSTGRES_DB", "zerotrust_api_db")
 
 if DB_PASS:
     user_info = f"{quote_plus(DB_USER)}:{quote_plus(DB_PASS)}"
@@ -55,7 +54,6 @@ def get_db() -> Generator[Session, None, None]:
     try:
         tenant_id = tenant_context.get()
         if tenant_id:
-            # Bind tenant_id strictly to current transaction for Row Level Security (RLS)
             db.execute(
                 text("SELECT set_config('app.current_tenant', :tenant, true)"),
                 {"tenant": tenant_id}
@@ -65,7 +63,6 @@ def get_db() -> Generator[Session, None, None]:
         db.rollback()
         raise
     finally:
-        # Reset tenant variable to prevent cross-tenant connection pool leakage
         try:
             db.execute(text("RESET app.current_tenant"))
         except Exception:

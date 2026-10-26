@@ -1,0 +1,95 @@
+name: "Static Application Security Testing"
+
+on:
+  workflow_call:
+    secrets:
+      SEMGREP_APP_TOKEN:
+        required: false
+      SONAR_HOST_URL:
+        required: false
+      SONAR_TOKEN:
+        required: false
+      SLACK_WEBHOOK_URL:
+        required: false
+
+jobs:
+  sast-secrets-and-quality:
+    name: "SAST, Secrets & SonarQube"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: read
+    outputs:
+      semgrep-json-path: semgrep-results.json
+      gitleaks-json-path: gitleaks-results.json
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Gitleaks Secret Scan
+        uses: ./.github/actions/gitleaks-action
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_REPORT: gitleaks-results.json
+
+      - name: Semgrep SAST Scan
+        uses: ./.github/actions/semgrep-action
+        continue-on-error: true
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        with:
+          generate-sarif: "1"
+          config: auto
+
+      - name: Rename Semgrep Output for Ingestion
+        run: |
+          if [ -f "semgrep.sarif" ]; then
+            cp semgrep.sarif semgrep-results.json
+          elif [ -f "semgrep-results.json" ]; then
+            true
+          else
+            echo "{}" > semgrep-results.json
+          fi
+
+      - name: Check SonarQube Credentials
+        id: sonar_check
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: SonarQube Scan
+        if: steps.sonar_check.outputs.enabled == 'true'
+        uses: ./.github/actions/sonarqube-scan-action
+        continue-on-error: true
+        with:
+          args: >
+            -Dsonar.projectKey=Vharse_Devsecops-Automation-Engine
+            -Dsonar.projectName=${{ github.event.repository.name || github.repository }}
+            -Dsonar.organization=vharse
+            -Dsonar.python.version=3.13
+            -Dsonar.sources=.
+            -Dsonar.exclusions=**/node_modules/**,**/vendor/**,**/.venv/**
+            -Dsonar.issue.ignore.multicriteria=e1
+            -Dsonar.issue.ignore.multicriteria.e1.ruleKey=docker:S6596
+            -Dsonar.issue.ignore.multicriteria.e1.resourceKey=src/Dockerfile
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: Upload SAST & Secret Artifacts
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: sast-secret-reports
+          path: |
+            semgrep-results.json
+            gitleaks-results.json

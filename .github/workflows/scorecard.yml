@@ -1,0 +1,31 @@
+name: "OpenSSF Scorecard Workflow"
+
+on:
+  workflow_call:
+
+jobs:
+  repo-scorecard:
+    name: "OpenSSF Security Posture Evaluation"
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Run OpenSSF Scorecard
+        uses: ./.github/actions/scorecard-action
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          publish_results: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Upload SARIF to GitHub Security Tab
+        uses: ./.github/actions/codeql-action/init
+        with:
+          sarif_file: scorecard-results.sarif

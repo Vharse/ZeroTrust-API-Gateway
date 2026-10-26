@@ -5,14 +5,12 @@ Configured for Hybrid SQI Production & Localhost Zero-Trust Testing
 import os
 import sys
 
-# Parse and validate CORS origins
 raw_cors = os.getenv(
     'CORS_ORIGINS',  
     'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173'
 )
 parsed_cors = [origin.strip() for origin in raw_cors.split(",") if origin.strip()]
 
-# Prevent dangerous CORS wildcard matching in authenticated environments
 if "*" in parsed_cors:
     raise ValueError("CORS_ORIGINS cannot contain wildcards ('*') in a Zero-Trust setup.")
 
@@ -31,7 +29,6 @@ ZT_CONFIG = {
     'cors_origins': parsed_cors
 }
 
-# Require explicitly injected environment secrets in non-dev environments
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL and os.getenv("ENVIRONMENT") == "production":
     raise RuntimeError("CRITICAL: DATABASE_URL environment variable must be set in production.")

@@ -4,14 +4,20 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-app_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-access_control_db}
+      POSTGRES_DB: ${POSTGRES_DB:-zerotrust_api_db}
     volumes:
       - ./app/database/init_rls.sql:/docker-entrypoint-initdb.d/init_rls.sql:ro
+    networks:
+      - db_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-app_user} -d $${POSTGRES_DB:-access_control_db}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER:-app_user} -d $${POSTGRES_DB:-zerotrust_api_db}",
+        ]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 90s
     restart: unless-stopped
 
@@ -21,14 +27,76 @@ services:
       - "7010:7010"
     environment:
       - PYTHONPATH=/app
+      - HOME=/tmp
       - POSTGRES_USER=${POSTGRES_USER:-app_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_HOST=db
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=${POSTGRES_DB:-access_control_db}
+      - POSTGRES_DB=${POSTGRES_DB:-zerotrust_api_db}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_HOST=redis  # Dynamically points to the redis container in Docker network
+      - UPSTREAM_WEB_APP_URL=https://edu.sqi.ng  # Target active external web app URL for your proxy router
+      # - UPSTREAM_WEB_APP_URL=http://host.docker.internal:8000  # Uncomment when testing local host app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Keeps the bridge ready for when you need it
+    networks:
+      - db_net
+      - telemetry_net
     volumes:
       - ./app/jwt_public.pem:/app/jwt_public.pem:ro
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    container_name: zt_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - db_net
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1 --loglevel warning
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: zt-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - telemetry_net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: zt-grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - GF_PLUGINS_ENABLE_ALPHA=false
+      - GF_SERVER_HTTP_ADDR=0.0.0.0
+    networks:
+      - telemetry_net
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+    restart: unless-stopped
+
+networks:
+  db_net:
+    internal: true
+  telemetry_net:
+    internal: false   #  <-- Comment this out or set to false so Docker allows host port publishing proxying
+
+volumes:
+  grafana_data:
+  redis_data:

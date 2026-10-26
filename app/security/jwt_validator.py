@@ -29,11 +29,17 @@ class TokenValidationResult:
     claims: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
-def load_public_key() -> str:
-    if not os.path.exists(PUBLIC_KEY_PATH):
-        raise RuntimeError(f"Public key file not found at '{PUBLIC_KEY_PATH}'")
-    with open(PUBLIC_KEY_PATH, "r") as f:
-        return f.read()
+# Load public key into memory once when the module initializes
+_CACHED_PUBLIC_KEY = None
+
+def get_cached_public_key() -> str:
+    global _CACHED_PUBLIC_KEY
+    if _CACHED_PUBLIC_KEY is None:
+        if not os.path.exists(PUBLIC_KEY_PATH):
+            raise RuntimeError(f"Public key file not found at '{PUBLIC_KEY_PATH}'")
+        with open(PUBLIC_KEY_PATH, "r") as f:
+            _CACHED_PUBLIC_KEY = f.read()
+    return _CACHED_PUBLIC_KEY
 
 def get_verification_key(token: str):
     """
@@ -48,7 +54,7 @@ def get_verification_key(token: str):
             pass
 
     if os.path.exists(PUBLIC_KEY_PATH):
-        return load_public_key()
+        return get_cached_public_key()
     raise RuntimeError(f"Public key file not found at '{PUBLIC_KEY_PATH}'")
 
 def validate_jwt(token: str) -> dict:

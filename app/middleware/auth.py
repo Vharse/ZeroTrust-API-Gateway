@@ -32,7 +32,7 @@ def require_zero_trust(
 
         token = credentials.credentials
         
-        # 1. Stateless JWT & ABAC Validation
+        # Stateless JWT & ABAC Validation
         try:
             claims = validate_jwt(token)
         except HTTPException:
@@ -59,7 +59,7 @@ def require_zero_trust(
         user_role = claims.get("role")
         user_clearance = claims.get("clearance", 0)
         
-        # 2. RBAC / ABAC Security Gates
+        # RBAC / ABAC Security Gates
         if required_role and user_role != required_role:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -72,7 +72,7 @@ def require_zero_trust(
                 detail=f"Access denied: Clearance level {user_clearance} below required {required_clearance}."
             )
 
-        # 3. Bind validated tenant_id to ContextVar on current worker thread
+        # Bind validated tenant_id to ContextVar on current worker thread
         tenant_context.set(str(tenant_id))
         request.state.tenant_id = str(tenant_id)
         request.state.user = claims

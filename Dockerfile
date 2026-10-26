@@ -1,12 +1,11 @@
 FROM python:3.13-slim
 
-# Create a non-root system user and group (Hardening)
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
 
-# Set PYTHONPATH so Python can locate modules across the project directory
 ENV PYTHONPATH=/app
+ENV PROMETHEUS_MULTIPROC_DIR=/app/prometheus_multiproc_dir
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -17,16 +16,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code 
 COPY app/ .
 
-# Copy additional root files needed by the application (e.g., public key if not inside app/)
 COPY app/jwt_public.pem .
 
-# Secure file permissions and switch to non-root user (Hardening)
-RUN chown -R appuser:appuser /app
+# Create and set permissions for Prometheus multi-worker telemetry directory
+RUN mkdir -p /app/prometheus_multiproc_dir && chown -R appuser:appuser /app
+
 USER appuser
 
 EXPOSE 7010
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7010"]
+CMD ["gunicorn", "app:app", "-k", "uvicorn.workers.UvicornWorker", "--workers", "2", "--bind", "0.0.0.0:7010"]
